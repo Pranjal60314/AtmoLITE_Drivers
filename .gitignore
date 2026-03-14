@@ -1,0 +1,18 @@
+# compiled files
+*.o
+*.out
+*.elf
+
+# logs
+*.log
+
+# waveform dumps
+*.vcd
+
+# build folders
+build/
+bin/
+
+# temporary files
+*.tmp
+*.swp
