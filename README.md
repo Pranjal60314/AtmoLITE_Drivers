@@ -29,7 +29,7 @@ To run the Verilog tests, use the provided scripts rather than invoking the simu
 Example:
 
 ```
-./vtest.sh <filename.v>
+./scripts/vtest.sh <test_bench_filename.v>
 ```
 
 Additional helper scripts are located in the `Scripts` directory.
