@@ -13,7 +13,7 @@ VVP_NAME="${BASE_NAME}.vvp"
 echo "--- Arch Linux Verilog Automator ---"
 echo "Target: $VCD_NAME"
 
-iverilog -g2012 -o "$VVP_NAME" -DVCD_FILE="\"$VCD_NAME\"" "$INPUT_FILE"
+iverilog -g2012 -o "$VVP_NAME" -DVCD_FILE="\"$VCD_NAME\"" *.v
 
 if [ $? -eq 0 ]; then
     vvp "$VVP_NAME"

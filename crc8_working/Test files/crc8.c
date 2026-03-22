@@ -54,7 +54,7 @@ uint8_t calc_crc8(const void * data, size_t size) {
 }
 
 int main(){
-    uint8_t data[15] = {1,2,3,4,5,6,7,8,9,10,11,12,13,14,15};
+    uint8_t data[15] = {0xFE,0xAA,0xBB,0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x00,0x01,0x23};
     size_t size = sizeof(data) / sizeof(data[0]);
 
     uint8_t crc = calc_crc8(data, size);
