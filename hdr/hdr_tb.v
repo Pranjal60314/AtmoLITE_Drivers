@@ -60,12 +60,13 @@ initial begin
         for (i = 0; i < 8; i = i + 1) begin
             $write("%b ", UART_TX);
             rx_byte[i] = UART_TX; // Store bit (i=0 is LSB)
+            $display("[Time %t] Sampling Bit %0d: %b", $time, i, UART_TX);
             #(BIT_TIME);
         end
         
         // Now rx_byte holds the full byte
         $display("\nSTOP BIT : %b", UART_TX);
-        $display("HEX VALUE: 0x%h", rx_byte); // %h prints in Hexadecimal
+        $display("HEX VALUE: 0x%h", rx_byte);
         $display("---------------------------------");
     end
 end
