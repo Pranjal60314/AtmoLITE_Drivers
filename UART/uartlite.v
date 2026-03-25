@@ -66,12 +66,13 @@ module uart_tx #(
                 end
 
                 DATA: begin
-                    tx <= shift_reg[0];           // LSB first
-                    shift_reg <= shift_reg >> 1;
-                    bit_count <= bit_count + 1;
-
-                    if (bit_count == 7)
+                    tx <= shift_reg[0];
+                    if (bit_count == 7) begin
                         state <= STOP;
+                    end else begin
+                        shift_reg <= shift_reg >> 1;
+                        bit_count <= bit_count + 1;
+                    end
                 end
 
                 STOP: begin
@@ -124,7 +125,7 @@ module uart_rx #(
         end
 
         DATA: begin
-            if (timer == TICK_COUNT-1) begin
+            if (timer == TICK_COUNT - 1) begin
                 timer <= 0;
                 if (bit_idx == 7)
                     state <= STOP;
@@ -132,7 +133,7 @@ module uart_rx #(
                     bit_idx <= bit_idx + 1;
             end else begin
                 timer <= timer + 1;
-                if (timer == TICK_COUNT/2) begin
+                if (timer == TICK_COUNT / 2) begin
                     data_out[bit_idx] <= rx;
                 end
             end

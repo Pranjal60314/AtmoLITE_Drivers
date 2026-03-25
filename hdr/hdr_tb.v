@@ -65,7 +65,7 @@ initial begin
         
         // Now rx_byte holds the full byte
         $display("\nSTOP BIT : %b", UART_TX);
-        $display("HEX VALUE: 0x%h", rx_byte); // %h prints in Hexadecimal
+        $display("HEX VALUE: 0x%h", rx_byte);
         $display("---------------------------------");
     end
 end
