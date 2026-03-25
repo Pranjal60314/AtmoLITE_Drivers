@@ -60,6 +60,7 @@ initial begin
         for (i = 0; i < 8; i = i + 1) begin
             $write("%b ", UART_TX);
             rx_byte[i] = UART_TX; // Store bit (i=0 is LSB)
+            $display("[Time %t] Sampling Bit %0d: %b", $time, i, UART_TX);
             #(BIT_TIME);
         end
         

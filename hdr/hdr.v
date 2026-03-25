@@ -1,0 +1,327 @@
+module hdr #(
+    parameter [7:0] logical_address = 8'hfe
+) ( 
+    input wire clk,
+    input wire reset,
+    input wire [7:0] protocol, subprotocol, packet_nr,
+    input wire [7:0] param0, param1, param2, param3, param4, param5, param6, param7,
+    input wire [23:0] data_length,
+    output wire UART_TX
+);
+
+//UART Instantiation 
+    reg reset_uart = 0;
+    reg [7:0] data_in_uart;
+    reg data_valid_uart = 0;
+    wire uart_busy;
+
+    uart_tx uart_inst(
+        .clk(clk),
+        .resetn(reset_uart),
+        .uart_txd(UART_TX),
+        .uart_tx_busy(uart_busy),
+        .uart_tx_en(data_valid_uart),
+        .uart_tx_data(data_in_uart)
+    );
+
+//CRC8 instantiation
+    reg reset_crc = 0;
+    reg [7:0] data_in_crc;
+    reg data_valid_crc = 0;
+    reg [7:0] crc_out;
+
+    initial begin
+        $display("CRC_OUT -- ",crc_out);
+    end
+
+    crc8_generator crc_inst(
+        .clk(clk),
+        .reset(reset_crc),
+        .data_in(data_in_crc),
+        .data_valid(data_valid_crc),
+        .crc_out(crc_out)
+    );
+
+    reg [4:0] index_uart = 0;
+    reg uart_busy_prev;
+
+always @(posedge clk) begin
+    
+        uart_busy_prev <= uart_busy;
+        if (uart_busy_prev && !uart_busy) begin//to check for the negative edge of the UART line
+            if (index_uart < 15) 
+                index_uart <= index_uart + 1;
+            else 
+                index_uart <= 0;
+        end
+    
+    // reseting the header file
+        if (reset) begin
+            index_uart <= 0;
+            data_valid_uart <= 0;
+            data_valid_crc <= 0;
+            reset_crc <= 1;
+            reset_uart <= 0;
+        end 
+        
+    //posting the values in this files                                                                          //so basically I am sending the bytes in bursts  
+        else begin                                                                                              //should I stream bits or  stream bytes 
+            reset_crc <= 0;                                                                                     //or basically like what is UART does it stream data bytes or the whole thing in one go with a predefined byte size that is kind of makes sense
+            
+            reset_uart <= 1;
+
+            if (!uart_busy_prev && !uart_busy && !data_valid_uart) begin
+                data_valid_uart <= 1;
+                
+                data_valid_crc <= (index_uart < 15) ? 1 : 0; 
+
+                case(index_uart)
+                    0:  begin data_in_uart <= logical_address;    data_in_crc <= logical_address;    end
+                    1:  begin data_in_uart <= protocol;           data_in_crc <= protocol;           end  
+                    2:  begin data_in_uart <= subprotocol;        data_in_crc <= subprotocol;        end  
+                    3:  begin data_in_uart <= packet_nr;          data_in_crc <= packet_nr;          end  
+                    4:  begin data_in_uart <= param0;             data_in_crc <= param0;             end  
+                    5:  begin data_in_uart <= param1;             data_in_crc <= param1;             end  
+                    6:  begin data_in_uart <= param2;             data_in_crc <= param2;             end  
+                    7:  begin data_in_uart <= param3;             data_in_crc <= param3;             end  
+                    8:  begin data_in_uart <= param4;             data_in_crc <= param4;             end  
+                    9:  begin data_in_uart <= param5;             data_in_crc <= param5;             end  
+                    10: begin data_in_uart <= param6;             data_in_crc <= param6;             end  
+                    11: begin data_in_uart <= param7;             data_in_crc <= param7;             end  
+                    12: begin data_in_uart <= data_length[23:16]; data_in_crc <= data_length[23:16]; end  
+                    13: begin data_in_uart <= data_length[15:8];  data_in_crc <= data_length[15:8];  end  
+                    14: begin data_in_uart <= data_length[7:0];   data_in_crc <= data_length[7:0];   end  
+                    15: begin data_in_uart <= crc_out;            data_valid_crc <= 0;               end  
+                endcase
+            end else begin
+                data_valid_uart <= 0;
+                data_valid_crc  <= 1;
+            end
+        end
+    end
+
+endmodule
+
+
+module crc8_generator (
+    input  wire        clk,
+    input  wire        reset,
+    input  wire [7:0]  data_in,
+    input  wire        data_valid,
+    output reg  [7:0]  crc_out
+    );
+
+    reg [7:0] crc_reg;
+    reg [7:0] CRC_TABLE [0:255];
+
+    wire [7:0] next_crc = CRC_TABLE[crc_reg ^ data_in];
+
+    initial begin
+    $readmemh("crc_table.hex", CRC_TABLE);
+    $display("CRC_TABLE LOADED");
+    //$writememh("debug_table.txt", CRC_TABLE);
+    end
+
+    always @(posedge clk or posedge reset) begin
+        if (reset) begin
+            crc_reg <= 8'h00;
+            crc_out <= 8'h00;
+        end 
+        else if (data_valid) begin
+            crc_reg <= next_crc;
+            crc_out <= next_crc;
+            //$display() 
+        end
+    end
+    endmodule
+
+// 
+// Module: uart_tx 
+// 
+// Notes:
+// - UART transmitter module.
+//
+
+module uart_tx
+#(
+    parameter BIT_RATE = 9600,
+    parameter CLK_HZ = 50000000,
+    parameter   PAYLOAD_BITS    = 8,
+    parameter   STOP_BITS       = 1
+)(
+input  wire         clk         , // Top level system clock input.
+input  wire         resetn      , // Asynchronous active low reset.
+output wire         uart_txd    , // UART transmit pin.
+output wire         uart_tx_busy, // Module busy sending previous item.
+input  wire         uart_tx_en  , // Send the data on uart_tx_data
+input  wire [PAYLOAD_BITS-1:0]   uart_tx_data  // The data to be sent
+);
+
+// --------------------------------------------------------------------------- 
+// // External parameters.
+// // 
+
+// //
+// // Input bit rate of the UART line.
+// parameter   BIT_RATE        = 9600; // bits / sec
+ localparam  BIT_P           = 1_000_000_000 * 1/BIT_RATE; // nanoseconds
+
+// //
+// // Clock frequency in hertz.
+// parameter   CLK_HZ          =    50_000_000;
+ localparam  CLK_P           = 1_000_000_000 * 1/CLK_HZ; // nanoseconds
+
+// //
+// // Number of data bits recieved per UART packet.
+// parameter   PAYLOAD_BITS    = 8;
+
+// //
+// // Number of stop bits indicating the end of a packet.
+// parameter   STOP_BITS       = 1;
+
+// --------------------------------------------------------------------------- 
+// Internal parameters.
+// 
+
+//
+// Number of clock cycles per uart bit.
+localparam       CYCLES_PER_BIT     = BIT_P / CLK_P;
+
+//
+// Size of the registers which store sample counts and bit durations.
+localparam       COUNT_REG_LEN      = 1+$clog2(CYCLES_PER_BIT);
+
+// --------------------------------------------------------------------------- 
+// Internal registers.
+// 
+
+//
+// Internally latched value of the uart_txd line. Helps break long timing
+// paths from the logic to the output pins.
+reg txd_reg;
+
+//
+// Storage for the serial data to be sent.
+reg [PAYLOAD_BITS-1:0] data_to_send;
+
+//
+// Counter for the number of cycles over a packet bit.
+reg [COUNT_REG_LEN-1:0] cycle_counter;
+
+//
+// Counter for the number of sent bits of the packet.
+reg [3:0] bit_counter;
+
+//
+// Current and next states of the internal FSM.
+reg [2:0] fsm_state;
+reg [2:0] n_fsm_state;
+
+localparam FSM_IDLE = 0;
+localparam FSM_START= 1;
+localparam FSM_SEND = 2;
+localparam FSM_STOP = 3;
+
+
+// --------------------------------------------------------------------------- 
+// FSM next state selection.
+// 
+
+assign uart_tx_busy = fsm_state != FSM_IDLE;
+assign uart_txd     = txd_reg;
+
+wire next_bit     = cycle_counter == CYCLES_PER_BIT;
+wire payload_done = bit_counter   == PAYLOAD_BITS  ;
+wire stop_done    = bit_counter   == STOP_BITS && fsm_state == FSM_STOP;
+
+//
+// Handle picking the next state.
+always @(*) begin : p_n_fsm_state
+    case(fsm_state)
+        FSM_IDLE : n_fsm_state = uart_tx_en   ? FSM_START: FSM_IDLE ;
+        FSM_START: n_fsm_state = next_bit     ? FSM_SEND : FSM_START;
+        FSM_SEND : n_fsm_state = payload_done ? FSM_STOP : FSM_SEND ;
+        FSM_STOP : n_fsm_state = stop_done    ? FSM_IDLE : FSM_STOP ;
+        default  : n_fsm_state = FSM_IDLE;
+    endcase
+end
+
+// --------------------------------------------------------------------------- 
+// Internal register setting and re-setting.
+// 
+
+//
+// Handle updates to the sent data register.
+integer i = 0;
+always @(posedge clk) begin : p_data_to_send
+    if(!resetn) begin
+        data_to_send <= {PAYLOAD_BITS{1'b0}};
+    end else if(fsm_state == FSM_IDLE && uart_tx_en) begin
+        data_to_send <= uart_tx_data;
+    end else if(fsm_state       == FSM_SEND       && next_bit ) begin
+        for ( i = PAYLOAD_BITS-2; i >= 0; i = i - 1) begin
+            data_to_send[i] <= data_to_send[i+1];
+        end
+    end
+end
+
+
+//
+// Increments the bit counter each time a new bit frame is sent.
+always @(posedge clk) begin : p_bit_counter
+    if(!resetn) begin
+        bit_counter <= 4'b0;
+    end else if(fsm_state != FSM_SEND && fsm_state != FSM_STOP) begin
+        bit_counter <= {COUNT_REG_LEN{1'b0}};
+    end else if(fsm_state == FSM_SEND && n_fsm_state == FSM_STOP) begin
+        bit_counter <= {COUNT_REG_LEN{1'b0}};
+    end else if(fsm_state == FSM_STOP&& next_bit) begin
+        bit_counter <= bit_counter + 1'b1;
+    end else if(fsm_state == FSM_SEND && next_bit) begin
+        bit_counter <= bit_counter + 1'b1;
+    end
+end
+
+
+//
+// Increments the cycle counter when sending.
+always @(posedge clk) begin : p_cycle_counter
+    if(!resetn) begin
+        cycle_counter <= {COUNT_REG_LEN{1'b0}};
+    end else if(next_bit) begin
+        cycle_counter <= {COUNT_REG_LEN{1'b0}};
+    end else if(fsm_state == FSM_START || 
+                fsm_state == FSM_SEND  || 
+                fsm_state == FSM_STOP   ) begin
+        cycle_counter <= cycle_counter + 1'b1;
+    end
+end
+
+
+//
+// Progresses the next FSM state.
+always @(posedge clk) begin : p_fsm_state
+    if(!resetn) begin
+        fsm_state <= FSM_IDLE;
+    end else begin
+        fsm_state <= n_fsm_state;
+    end
+end
+
+
+//
+// Responsible for updating the internal value of the txd_reg.
+always @(posedge clk) begin : p_txd_reg
+    if(!resetn) begin
+        txd_reg <= 1'b1;
+    end else if(fsm_state == FSM_IDLE) begin
+        txd_reg <= 1'b1;
+    end else if(fsm_state == FSM_START) begin
+        txd_reg <= 1'b0;
+    end else if(fsm_state == FSM_SEND) begin
+        txd_reg <= data_to_send[0];
+    end else if(fsm_state == FSM_STOP) begin
+        txd_reg <= 1'b1;
+    end
+end
+endmodule
