@@ -4,12 +4,19 @@ module hdr_tb;
     //inputs for the header
     reg clk;
     reg reset;
+
     reg [7:0] protocol, subprotocol, packet_nr;
     reg [7:0] param0, param1, param2, param3, param4, param5, param6, param7;
     reg [23:0] data_length;
     
     //outputs
     wire UART_TX;
+
+    //inputs for the receiver
+    reg rx_en;
+    wire rx_break;
+    wire rx_valid;
+    wire [7:0] rx_data;
 
     //machine instantiation
     hdr #(
@@ -26,13 +33,36 @@ module hdr_tb;
         .UART_TX(UART_TX)
     );
 
+    uart_rx #(
+        .BIT_RATE(9600), // bits / sec
+        .CLK_HZ(50_000_000),
+        .PAYLOAD_BITS(8),
+        .STOP_BITS(1)
+    ) rx_inst (
+      .clk(clk), // Top level system clock input.
+      .resetn(~reset), // Asynchronous active low reset.
+      .uart_rxd(UART_TX), // UART Recieve pin.
+      .uart_rx_en(rx_en), // Recieve enable
+      .uart_rx_break(rx_break), // Did we get a BREAK message?
+      .uart_rx_valid(rx_valid), // Valid data recieved and available.
+      .uart_rx_data(rx_data)// The recieved data.
+    );
+
+
     always #10 clk = ~clk;
+
+    always @(posedge clk) begin
+        if(rx_valid) begin
+            $display("[TIME %time] Receiver byte: 0x%h",$time,rx_data);
+        end
+    end
 
     initial begin
         $dumpfile(`VCD_FILE);
         $dumpvars(0,hdr_tb);
         clk = 0;
         reset = 1;
+        rx_en = 1;
         #100
         reset = 0;
         $display("Simulation Started. Monitoring UART_TX...");
@@ -42,34 +72,34 @@ module hdr_tb;
         $finish;
     end
 
-parameter BIT_TIME = 104167;
+// parameter BIT_TIME = 104167;
 
 
-reg [7:0] rx_byte; // Temporary register to hold the bits
-integer i;         // Loop counter
+// reg [7:0] rx_byte; // Temporary register to hold the bits
+// integer i;         // Loop counter
 
-initial begin
-    forever begin
-        @(negedge UART_TX);
-        $display("\n--- NEW BYTE DETECTED AT %t ---", $time);
+// initial begin
+//     forever begin
+//         @(negedge UART_TX);
+//         $display("\n--- NEW BYTE DETECTED AT %t ---", $time);
         
-        // Sample in the middle of the first data bit
-        #(BIT_TIME * 1.5); 
+//         // Sample in the middle of the first data bit
+//         #(BIT_TIME * 1.5); 
         
-        $write("DATA BITS: ");
-        for (i = 0; i < 8; i = i + 1) begin
-            $write("%b ", UART_TX);
-            rx_byte[i] = UART_TX; // Store bit (i=0 is LSB)
-            $display("[Time %t] Sampling Bit %0d: %b", $time, i, UART_TX);
-            #(BIT_TIME);
-        end
+//         $write("DATA BITS: ");
+//         for (i = 0; i < 8; i = i + 1) begin
+//             $write("%b ", UART_TX);
+//             rx_byte[i] = UART_TX; // Store bit (i=0 is LSB)
+//             $display("[Time %t] Sampling Bit %0d: %b", $time, i, UART_TX);
+//             #(BIT_TIME);
+//         end
         
-        // Now rx_byte holds the full byte
-        $display("\nSTOP BIT : %b", UART_TX);
-        $display("HEX VALUE: 0x%h", rx_byte);
-        $display("---------------------------------");
-    end
-end
+//         // Now rx_byte holds the full byte
+//         $display("\nSTOP BIT : %b", UART_TX);
+//         $display("HEX VALUE: 0x%h", rx_byte);
+//         $display("---------------------------------");
+//     end
+// end
 
 
 
