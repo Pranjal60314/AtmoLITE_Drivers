@@ -4,6 +4,7 @@ module hdr_tb;
     //inputs for the header
     reg clk;
     reg reset;
+    reg start_send;
 
     reg [7:0] protocol, subprotocol, packet_nr;
     reg [7:0] param0, param1, param2, param3, param4, param5, param6, param7;
@@ -24,12 +25,13 @@ module hdr_tb;
     ) uut (
         .clk(clk),
         .reset(reset),
+        .start_send(start_send),
         .protocol(8'hAA),
         .subprotocol(8'hBB),
         .packet_nr(8'h01),
         .param0(8'h11), .param1(8'h22), .param2(8'h33), .param3(8'h44),
         .param4(8'h55), .param5(8'h66), .param6(8'h77), .param7(8'h88),
-        .data_length(24'h000123),
+        .data_length(24'h004423),
         .UART_TX(UART_TX)
     );
 
@@ -61,12 +63,15 @@ module hdr_tb;
         $dumpfile(`VCD_FILE);
         $dumpvars(0,hdr_tb);
         clk = 0;
+        start_send = 1;
         reset = 1;
         rx_en = 1;
         #100
+        start_send = 0;
         reset = 0;
         $display("Simulation Started. Monitoring UART_TX...");
         #20050000; // Run for 25ms instead of 20ms; 
+        start_send = 1;
         reset = 1;
         $display("Simulation Finished.");
         $finish;

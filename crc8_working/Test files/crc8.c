@@ -45,7 +45,7 @@ uint8_t calc_crc8(const void * data, size_t size) {
     uint8_t * end = pos + size;
 
     while (pos < end) {
-        printf("Input: 0x%02X, CRC: 0x%02X\n", *pos, val);
+        printf(" CRC: 0x%02X, Input: 0x%02X\n", val, *pos);
         val = CRC_TABLE[val ^ *pos];
         pos++;
     }
@@ -54,10 +54,11 @@ uint8_t calc_crc8(const void * data, size_t size) {
 }
 
 int main(){
-    uint8_t data[15] = {0xFE,0xAA,0xBB,0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x00,0x01,0x23};
+    uint8_t data[15] = {0xFE,0xAA,0xBB,0x01,0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,0x23,0x44,0x00};
     size_t size = sizeof(data) / sizeof(data[0]);
 
     uint8_t crc = calc_crc8(data, size);
+
     printf("CRC8: 0x%02X\n", crc);
 
     return 0;

@@ -3,6 +3,7 @@ module hdr #(
 ) ( 
     input wire clk,
     input wire reset,
+    input wire start_send,
     input wire [7:0] protocol, subprotocol, packet_nr,
     input wire [7:0] param0, param1, param2, param3, param4, param5, param6, param7,
     input wire [23:0] data_length,
@@ -44,60 +45,133 @@ module hdr #(
 
     reg [4:0] index_uart = 0;
     reg uart_busy_prev;
+    
+    initial begin
+    $monitor("Data to CRC: 0x%h Current CRC: 0x%h", data_in_crc, crc_out);
+    end
+
+localparam IDLE = 0;
+    localparam SEND = 1;
+    localparam DONE = 2;
+    reg [2:0] state = IDLE; // Use the parameter name for clarity
 
 always @(posedge clk) begin
-    
-        uart_busy_prev <= uart_busy;
-        if (uart_busy_prev && !uart_busy) begin//to check for the negative edge of the UART line
-            if (index_uart < 15) 
-                index_uart <= index_uart + 1;
-            else 
-                index_uart <= 0;
-        end
-    
-    // reseting the header file
-        if (reset) begin
-            index_uart <= 0;
+    case(state)
+        IDLE: begin
+            index_uart      <= 0;
             data_valid_uart <= 0;
-            data_valid_crc <= 0;
-            reset_crc <= 1;
-            reset_uart <= 0;
-        end 
-        
-    //posting the values in this files                                                                            
-        else begin                                                                                               
-            reset_crc <= 0;                                                                                     
-            reset_uart <= 1;
+            data_valid_crc  <= 0;
+            reset_crc       <= 1;
+            reset_uart      <= 0;
+            if (start_send) begin state <= SEND; end
+        end
 
-            if (!uart_busy_prev && !uart_busy && !data_valid_uart) begin
-                data_valid_uart <= 1;
-                
-                data_valid_crc <= (index_uart < 15) ? 1 : 0; 
+        SEND: begin
+            uart_busy_prev <= uart_busy;
+            
+            if (uart_busy_prev && !uart_busy) begin
+                if (index_uart < 15) begin
+                    index_uart <= index_uart + 1;
+                end else begin
+                    state <= DONE; 
+                end
+            end
 
-                case(index_uart)
-                    0:  begin data_in_uart <= logical_address;    data_in_crc <= logical_address;    end
-                    1:  begin data_in_uart <= protocol;           data_in_crc <= protocol;           end  
-                    2:  begin data_in_uart <= subprotocol;        data_in_crc <= subprotocol;        end  
-                    3:  begin data_in_uart <= packet_nr;          data_in_crc <= packet_nr;          end  
-                    4:  begin data_in_uart <= param0;             data_in_crc <= param0;             end  
-                    5:  begin data_in_uart <= param1;             data_in_crc <= param1;             end  
-                    6:  begin data_in_uart <= param2;             data_in_crc <= param2;             end  
-                    7:  begin data_in_uart <= param3;             data_in_crc <= param3;             end  
-                    8:  begin data_in_uart <= param4;             data_in_crc <= param4;             end  
-                    9:  begin data_in_uart <= param5;             data_in_crc <= param5;             end  
-                    10: begin data_in_uart <= param6;             data_in_crc <= param6;             end  
-                    11: begin data_in_uart <= param7;             data_in_crc <= param7;             end  
-                    12: begin data_in_uart <= data_length[23:16]; data_in_crc <= data_length[23:16]; end  
-                    13: begin data_in_uart <= data_length[15:8];  data_in_crc <= data_length[15:8];  end  
-                    14: begin data_in_uart <= data_length[7:0];   data_in_crc <= data_length[7:0];   end  
-                    15: begin data_in_uart <= crc_out;            data_valid_crc <= 0;               end  
-                endcase
-            end else begin
-                data_valid_uart <= 0;
-                data_valid_crc  <= 1;
+            if (!uart_busy) begin                                                                                               
+                reset_crc  <= 0;                                                                                     
+                reset_uart <= 1;
+
+                if (!uart_busy_prev && !data_valid_uart) begin
+                    data_valid_uart <= 1;
+                    
+                    case(index_uart)
+                        0:  begin data_in_uart <= logical_address;    data_in_crc <= logical_address;    data_valid_crc <= 1; end
+                        1:  begin data_in_uart <= protocol;           data_in_crc <= protocol;           data_valid_crc <= 1; end  
+                        2:  begin data_in_uart <= subprotocol;        data_in_crc <= subprotocol;        data_valid_crc <= 1; end  
+                        3:  begin data_in_uart <= packet_nr;          data_in_crc <= packet_nr;          data_valid_crc <= 1; end  
+                        4:  begin data_in_uart <= param0;             data_in_crc <= param0;             data_valid_crc <= 1; end  
+                        5:  begin data_in_uart <= param1;             data_in_crc <= param1;             data_valid_crc <= 1; end  
+                        6:  begin data_in_uart <= param2;             data_in_crc <= param2;             data_valid_crc <= 1; end  
+                        7:  begin data_in_uart <= param3;             data_in_crc <= param3;             data_valid_crc <= 1; end  
+                        8:  begin data_in_uart <= param4;             data_in_crc <= param4;             data_valid_crc <= 1; end  
+                        9:  begin data_in_uart <= param5;             data_in_crc <= param5;             data_valid_crc <= 1; end  
+                        10: begin data_in_uart <= param6;             data_in_crc <= param6;             data_valid_crc <= 1; end  
+                        11: begin data_in_uart <= param7;             data_in_crc <= param7;             data_valid_crc <= 1; end  
+                        12: begin data_in_uart <= data_length[7:0];   data_in_crc <= data_length[7:0];   data_valid_crc <= 1; end  
+                        13: begin data_in_uart <= data_length[15:8];  data_in_crc <= data_length[15:8];  data_valid_crc <= 1; end  
+                        14: begin data_in_uart <= data_length[23:16]; data_in_crc <= data_length[23:16]; data_valid_crc <= 1; end    
+                        15: begin data_in_uart <= crc_out;            data_valid_crc <= 0;               end  
+                        default: state <= DONE;
+                    endcase
+                end else begin
+                    data_valid_uart <= 0;
+                    data_valid_crc  <= 0;
+                end
             end
         end
-    end
+
+        DONE: begin
+            data_valid_uart <= 0;
+            data_valid_crc  <= 0;
+            state <= IDLE;
+        end
+        
+        default: state <= IDLE;
+    endcase
+end
+
+
+        // uart_busy_prev <= uart_busy;
+        // if (uart_busy_prev && !uart_busy) begin//to check for the negative edge of the UART line and increamenting the data pointer so that it can basically change the data that is incoming here
+        //     if (index_uart < 15) 
+        //         index_uart <= index_uart + 1;
+        //     else 
+        //         index_uart <= 0;
+        // end
+    
+    // reseting the header file
+        // if (start_send) begin
+        //     index_uart <= 0;
+        //     data_valid_uart <= 0;
+        //     data_valid_crc <= 0;
+        //     reset_crc <= 1;
+        //     reset_uart <= 0;
+        // end 
+        
+    //posting the values in this files                                                                            
+        // else begin                                                                                               
+        //     reset_crc <= 0;                                                                                     
+        //     reset_uart <= 1;
+
+        //     if (!uart_busy_prev && !uart_busy && !data_valid_uart) begin
+        //         data_valid_uart <= 1;
+                
+        //         // data_valid_crc <= (index_uart < 15) ? 1 : 0; 
+
+        //         case(index_uart)
+        //             0:  begin data_in_uart <= logical_address;    data_in_crc <= logical_address;    data_valid_crc <= 1; end
+        //             1:  begin data_in_uart <= protocol;           data_in_crc <= protocol;           data_valid_crc <= 1; end  
+        //             2:  begin data_in_uart <= subprotocol;        data_in_crc <= subprotocol;        data_valid_crc <= 1; end  
+        //             3:  begin data_in_uart <= packet_nr;          data_in_crc <= packet_nr;          data_valid_crc <= 1; end  
+        //             4:  begin data_in_uart <= param0;             data_in_crc <= param0;             data_valid_crc <= 1; end  
+        //             5:  begin data_in_uart <= param1;             data_in_crc <= param1;             data_valid_crc <= 1; end  
+        //             6:  begin data_in_uart <= param2;             data_in_crc <= param2;             data_valid_crc <= 1; end  
+        //             7:  begin data_in_uart <= param3;             data_in_crc <= param3;             data_valid_crc <= 1; end  
+        //             8:  begin data_in_uart <= param4;             data_in_crc <= param4;             data_valid_crc <= 1; end  
+        //             9:  begin data_in_uart <= param5;             data_in_crc <= param5;             data_valid_crc <= 1; end  
+        //             10: begin data_in_uart <= param6;             data_in_crc <= param6;             data_valid_crc <= 1; end  
+        //             11: begin data_in_uart <= param7;             data_in_crc <= param7;             data_valid_crc <= 1; end  
+        //             12: begin data_in_uart <= data_length[7:0];   data_in_crc <= data_length[7:0];   data_valid_crc <= 1; end  
+        //             13: begin data_in_uart <= data_length[15:8];  data_in_crc <= data_length[15:8];  data_valid_crc <= 1; end  
+        //             14: begin data_in_uart <= data_length[23:16]; data_in_crc <= data_length[23:16]; data_valid_crc <= 1; end    
+        //             15: begin data_in_uart <= crc_out;            data_valid_crc <= 0;               end  
+        //         endcase
+        //     end else begin
+        //         data_valid_uart <= 0;
+        //         data_valid_crc  <= 0;
+        //     end
+        // end
+ 
 
 endmodule
 

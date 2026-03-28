@@ -27,21 +27,23 @@ initial begin
 
     #10 reset = 0;
 
-    send_byte(1);
-    send_byte(2);
-    send_byte(3);
-    send_byte(4);
-    send_byte(5);
-    send_byte(6);
-    send_byte(7);
-    send_byte(8);
-    send_byte(9);
-    send_byte(10);
-    send_byte(11);
-    send_byte(12);
-    send_byte(13);
-    send_byte(14);
-    send_byte(15);
+    send_byte(8'hfe);
+    send_byte(8'hAA);
+    send_byte(8'hBB);
+    send_byte(8'h01);
+    send_byte(8'h11);
+    send_byte(8'h11);
+    send_byte(8'h22);
+    send_byte(8'h33);
+    send_byte(8'h44);
+    send_byte(8'h55);
+    send_byte(8'h66);
+    send_byte(8'h77);
+    send_byte(8'h88);
+    send_byte(8'h99);
+    send_byte(8'h23);
+    send_byte(8'h01);
+    send_byte(8'h00);
     
 
     #20;
