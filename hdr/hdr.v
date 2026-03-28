@@ -10,10 +10,10 @@ module hdr #(
 );
 
 //UART Instantiation 
-    reg reset_uart = 0;
-    reg [7:0] data_in_uart;
-    reg data_valid_uart = 0;
-    wire uart_busy;
+    reg reset_uart = 0;//resets all the values
+    reg [7:0] data_in_uart;//data input 1 byte length
+    reg data_valid_uart = 0;//data valid high signals uart to sample from data in uart
+    wire uart_busy;//outputs so that we don't interrupt the UART signal
 
     uart_tx uart_inst(
         .clk(clk),
@@ -64,10 +64,9 @@ always @(posedge clk) begin
             reset_uart <= 0;
         end 
         
-    //posting the values in this files                                                                          //so basically I am sending the bytes in bursts  
-        else begin                                                                                              //should I stream bits or  stream bytes 
-            reset_crc <= 0;                                                                                     //or basically like what is UART does it stream data bytes or the whole thing in one go with a predefined byte size that is kind of makes sense
-            
+    //posting the values in this files                                                                            
+        else begin                                                                                               
+            reset_crc <= 0;                                                                                     
             reset_uart <= 1;
 
             if (!uart_busy_prev && !uart_busy && !data_valid_uart) begin

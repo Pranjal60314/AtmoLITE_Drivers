@@ -72,34 +72,33 @@ module hdr_tb;
         $finish;
     end
 
-// parameter BIT_TIME = 104167;
+parameter BIT_TIME = 104167;
 
 
-// reg [7:0] rx_byte; // Temporary register to hold the bits
-// integer i;         // Loop counter
+reg [7:0] rx_byte; // Temporary register to hold the bits
+integer i;         // Loop counter
 
-// initial begin
-//     forever begin
-//         @(negedge UART_TX);
-//         $display("\n--- NEW BYTE DETECTED AT %t ---", $time);
+initial begin
+    forever begin
+        @(negedge UART_TX);
+        $display("\n--- NEW BYTE DETECTED AT %t ---", $time);
         
-//         // Sample in the middle of the first data bit
-//         #(BIT_TIME * 1.5); 
+        // Sample in the middle of the first data bit
+        #(BIT_TIME * 1.5); 
         
-//         $write("DATA BITS: ");
-//         for (i = 0; i < 8; i = i + 1) begin
-//             $write("%b ", UART_TX);
-//             rx_byte[i] = UART_TX; // Store bit (i=0 is LSB)
-//             $display("[Time %t] Sampling Bit %0d: %b", $time, i, UART_TX);
-//             #(BIT_TIME);
-//         end
+        $write("DATA BITS: ");
+        for (i = 0; i < 8; i = i + 1) begin
+            rx_byte[i] = UART_TX; // Store bit (i=0 is LSB)
+            $display("[Time %t] Sampling Bit %0d: %b", $time, i, UART_TX);
+            #(BIT_TIME);
+        end
         
-//         // Now rx_byte holds the full byte
-//         $display("\nSTOP BIT : %b", UART_TX);
-//         $display("HEX VALUE: 0x%h", rx_byte);
-//         $display("---------------------------------");
-//     end
-// end
+        // Now rx_byte holds the full byte
+        $display("\nSTOP BIT : %b", UART_TX);
+        $display("HEX VALUE: 0x%h", rx_byte);
+        $display("---------------------------------");
+    end
+end
 
 
 
