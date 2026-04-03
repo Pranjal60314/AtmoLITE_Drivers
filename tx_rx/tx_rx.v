@@ -34,10 +34,13 @@ module control_module #(
     localparam WAIT_CRC       = 4'd3;
     localparam SEND_DATA      = 4'd4;
     localparam SEND_DATA_CRC  = 4'd5;
-    localparam RESET_CRC      = 4'd6 ;
+    localparam RESET_CRC      = 4'd6;
     localparam WAIT_REPLY     = 4'd7;
-    localparam RETRY_GAP      = 4'd8;
-    localparam ERROR_FATAL    = 4'd9;
+    localparam COLLECT_BYTE   = 4'd8;
+    localparam STORE_BYTE     = 4'd9;
+    localparam VALIDATE_PACKET= 4'd10;
+    localparam RETRY_GAP      = 4'd11;
+    localparam ERROR_FATAL    = 4'd12;
 
     // --- Timing Constants ---
     localparam TIMEOUT_VAL = CLK_HZ/20; // 50ms
@@ -52,6 +55,8 @@ module control_module #(
     reg [3:0]  rx_cnt;
     reg  hdr_sent;
     reg  data_sent;
+    reg [7:0] rx_packet_buffer [0:15];
+
 
     // Connections to Sub-modules
     reg  tx_wr_en;
@@ -72,6 +77,14 @@ module control_module #(
 
     wire [7:0] payload_dout;
     reg [7:0] payload_wr_ptr; 
+
+    reg [7:0] response_buffer [4:14];
+    reg       resp_valid_pulse;
+
+    reg        rx_crc_en;
+    reg        rx_crc_reset;
+    reg  [7:0] rx_crc_data_in;
+    wire [7:0] rx_crc_out;
     // --- Instantiations ---
 
     // 1. Header Snapshot/Mux
@@ -116,12 +129,21 @@ module control_module #(
         .rd_data(payload_dout)
     );
 
+    // Instantiate the RX CRC Unit
+    crc8_generator rx_crc_inst (
+        .clk(clk), 
+        .reset(rx_crc_reset),
+        .data_in(rx_crc_data_in), 
+        .data_valid(rx_crc_en), 
+        .crc_out(rx_crc_out)
+    );
+
 
 integer log_file;
     initial begin
                 // Keep the console monitor for real-time debugging
-        $monitor("[%0t] State: %d | TX: %b Data: %h | HDR: %d | DATA: %d | Timer: %d | CRC: %H",
-                        $time, uut.state, uut.tx_wr_en, uut.tx_wr_data, uut.hdr_idx, uut.data_cnt, uut.timer, uut.crc_out);    
+        $monitor("[%0t] State: %d | TX: %b Data: %h | RX: %b DATA: %h |RD_CNT: %d | Timer: %d | rx_fifo_empty: %b| ",
+                        $time, uut.state, uut.tx_wr_en, uut.tx_wr_data, uut.rx_fifo_rd_en,uut.rx_fifo_data,  uut.rx_cnt, uut.timer, uut.rx_fifo_empty);    
             end
 
             
@@ -190,6 +212,7 @@ integer log_file;
                         state      <= RESET_CRC;
                         
                     end
+                    hdr_sent <= 0;
                 end
 
                 RESET_CRC:begin
@@ -222,33 +245,47 @@ integer log_file;
                         timer      <= 0;
                         
                     end
-                end
-
-                WAIT_REPLY: begin
-                    hdr_sent <= 0;
                     data_sent <= 0;
+                end
+                
+                WAIT_REPLY: begin
                     timer <= timer + 1;
-                    if (timer >= TIMEOUT_VAL) begin
-                        state <= RETRY_GAP;
-                        timer <= 0;
-                    end else if (!rx_fifo_empty) begin
-                        // Byte received! Pulse read.
+                    if (timer >= TIMEOUT_VAL) state <= RETRY_GAP;
+                    
+                    else if (!rx_fifo_empty) begin
                         rx_fifo_rd_en <= 1;
-                        
-                        // ACK Logic: Look at Byte 3 of the response
-                        // In a real scenario, you'd collect all 16, check CRC,
-                        // then check byte 3. For now, we'll check byte 3 directly.
-                        if (rx_cnt == 4'd3) begin
-                            if (rx_fifo_data == 8'h00) begin // 0x00 is ACK
-                                state <= IDLE; // Packet confirmed!
-                                retries <= 0;
-                            end else begin
-                                state <= RETRY_GAP; // NACK received
-                            end
-                        end
-                        rx_cnt <= rx_cnt + 1;
+                        state <= COLLECT_BYTE;
                     end
                 end
+
+                COLLECT_BYTE: begin
+                    rx_fifo_rd_en <= 0;
+                    state <= STORE_BYTE; 
+                end
+
+                STORE_BYTE: begin
+                    rx_packet_buffer[rx_cnt] <= rx_fifo_data;
+                    
+                    if (rx_cnt == 4'd15) begin
+                        state <= VALIDATE_PACKET;
+                    end else begin
+                        rx_cnt <= rx_cnt + 1;
+                        state  <= WAIT_REPLY;
+                    end
+                end
+
+                VALIDATE_PACKET: begin
+                    if (rx_packet_buffer[0] != 8'hFE)          state <= RETRY_GAP;
+                    else if (rx_packet_buffer[1] != protocol)  state <= RETRY_GAP;
+                    else if (rx_packet_buffer[2] != packet_nr) state <= RETRY_GAP;
+                    else if (rx_packet_buffer[3] != 8'h00)     state <= RETRY_GAP;
+                    else if (rx_packet_buffer[15] != 8'hAA)    state <= RETRY_GAP; 
+                    else begin
+                        state <= IDLE;
+                        resp_valid_pulse <= 1;
+                    end
+                end
+
 
                 RETRY_GAP: begin
                     timer <= timer + 1;

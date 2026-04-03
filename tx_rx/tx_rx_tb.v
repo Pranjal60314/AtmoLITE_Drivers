@@ -2,7 +2,7 @@
 
 module control_module_tb();
 
-    parameter BIT_RATE   = 115200; 
+    parameter BIT_RATE   = 9600; 
     parameter CLK_HZ     = 50_000_000;
     parameter CLK_PERIOD = 20;     
     localparam BIT_PERIOD = 1_000_000_000 / BIT_RATE;
@@ -62,8 +62,8 @@ module control_module_tb();
 
 // --- Batch Load Test logic ---
     initial begin
-        $dumpfile(`VCD_FILE);
-        $dumpvars(0, control_module_tb);
+        //$dumpfile(`VCD_FILE);
+        //$dumpvars(0, control_module_tb);
         // Reset Phase
         resetn = 0; header_valid = 0; start_trigger = 0;
         data_valid = 0; data_in = 0;
@@ -101,12 +101,18 @@ module control_module_tb();
         // Even if a timeout happens, the FSM has the data in RAM
         wait(uut.state == 4'd7); 
         //wait(uut.btx_inst.tx_busy == 0);
-        //#(BIT_PERIOD * 2);
+        #(100);
         
         send_ack_reply(8'hA1);
 
         wait(uut.state == 4'd0);
         $display("[%0t] TB: SUCCESSFULLY RETURNED TO IDLE", $time);
+
+        if (uut.state == 4'd9) begin
+            $display("[%0t] TB: TIMEOUT OCCURRED, BUT DATA IS IN RAM", $time);
+        end else begin
+            $display("[%0t] TB: NORMAL COMPLETION WITHOUT TIMEOUT", $time);
+        end
         $finish;
     end
 
