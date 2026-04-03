@@ -1,733 +1,281 @@
-module top_system_controller #(
-        parameter BIT_RATE   = 9600,
-        parameter CLK_HZ     = 50_000_000,
-        parameter FIFO_DEPTH = 32,
-        parameter DATA_LEN   = 256
-    )(
-        input  wire        clk,
-        input  wire        resetn,
-        input  wire        start_trigger,  // Signal to begin transmission
+module control_module #(
+    parameter BIT_RATE   = 9600,
+    parameter CLK_HZ     = 50_000_000,
+    parameter FIFO_DEPTH = 64
+)(
+    input wire clk,
+    input wire resetn,
 
-        //Header Fields
-        input wire [7:0] protocol, subprotocol, packet_nr,
-        input wire [7:0] param0, param1, param2, param3, 
-        input wire [7:0] param4, param5, param6, param7,
-        input wire [23:0] data_length,
-        input wire data_en;
-        
-        // Physical UART Pins
-        output wire        uart_txd,
-        input  wire        uart_rxd,
-        
-        output wire        system_busy,
-        output wire        fifo_tx_full
-    );
-        //internal data storage
-        reg 
+    // Header Inputs (to be latched)
+    input wire [7:0]  protocol, subprotocol, packet_nr,
+    input wire [7:0]  param0, param1, param2, param3, param4, param5, param6, param7,
+    input wire [23:0] xlen,
+    input wire        header_valid,
+    input wire        start_trigger, 
 
-        // --- Internal Interconnects ---
-        reg  [7:0]  master_data_bus;    // The "T-Junction" bus
-        reg         master_wr_en;       // The "Pulse" for both FIFO and CRC
-        
-        wire [7:0]  hdr_dout;
-        reg  [3:0]  hdr_index;
-        
-        wire [7:0]  crc_result;
-        reg         crc_reset;
-        
-        reg  [7:0]  data_addr;
-        wire [7:0]  user_data_out;      // From your data storage/RAM
-        
-        // --- 1. Header Provider (Passive) ---
-        hdr #(.logical_address(8'hFE)) header_inst (
-            .index(hdr_index),
-            .protocol(protocol), .subprotocol(subprotocol), .packet_nr(packet_nr),
-            .param0(param0), .param1(param1), .param2(param2), .param3(param3),
-            .param4(param4), .param5(param5), .param6(param6), .param7(param7),
-            .data_length(data_length),
-            .dout(hdr_dout)
-        );
+    // Physical UART Pins
+    output wire       tx,
+    input  wire       rx,
 
-        // --- 2. Streaming CRC Engine ---
-        crc8_generator crc_inst (
-            .clk(clk),
-            .reset(crc_reset),
-            .data_in(master_data_bus),
-            .data_valid(master_wr_en),  // Calculates ONLY when we write to FIFO
-            .crc_out(crc_result)
-        );
+    // Data Source (Internal Interface)
+    input wire [7:0]  data_in,
+    input wire        data_valid,
 
-        // --- 3. Buffered UART Transmitter ---
-        buffered_uart_tx #(
-            .BIT_RATE(BIT_RATE), .CLK_HZ(CLK_HZ), .FIFO_DEPTH(FIFO_DEPTH)
-        ) uart_tx_block (
-            .clk(clk),
-            .resetn(resetn),
-            .tx_en(1'b1),
-            .wr_data(master_data_bus),
-            .wr_en(master_wr_en),
-            .fifo_full(fifo_tx_full),
-            .uart_txd(uart_txd),
-            .uart_busy(system_busy)
-        );
-
-        // --- 4. The Master State Machine ---
-        localparam IDLE      = 3'd0;
-        localparam SEND_HDR  = 3'd1;
-        localparam PUSH_CRC  = 3'd2;
-        localparam SEND_BODY = 3'd3;
-        localparam DONE      = 3'd4;
-
-        reg [2:0] state;
-        reg [8:0] body_counter;
-
-        always @(posedge clk) begin
-            if (!resetn) begin
-                state        <= IDLE;
-                master_wr_en <= 0;
-                crc_reset    <= 1;
-                hdr_index    <= 0;
-                data_addr    <= 0;
-                body_counter <= 0;
-            end else begin
-                case (state)
-                    IDLE: begin
-                        master_wr_en <= 0;
-                        crc_reset    <= 1;
-                        hdr_index    <= 0;
-                        data_addr    <= 0;
-                        body_counter <= 0;
-                        if (start_trigger) state <= SEND_HDR;
-                    end
-
-                    SEND_HDR: begin
-                        crc_reset <= 0; // Start the math
-                        if (!fifo_tx_full) begin
-                            master_data_bus <= hdr_dout;
-                            master_wr_en    <= 1;
-                            if (hdr_index == 14) begin
-                                state <= PUSH_CRC;
-                            end else begin
-                                hdr_index <= hdr_index + 1;
-                            end
-                        end else master_wr_en <= 0;
-                    end
-
-                    PUSH_CRC: begin
-                        if (!fifo_tx_full) begin
-                            master_data_bus <= crc_result;
-                            master_wr_en    <= 1;
-                            state           <= SEND_BODY;
-                        end else master_wr_en <= 0;
-                    end
-
-                    SEND_BODY: begin
-                        // Note: Here you would ideally reset CRC if the body 
-                        // needs its own separate checksum.
-                        if (!fifo_tx_full) begin
-                            master_data_bus <= user_data_out; // From your 256-byte source
-                            master_wr_en    <= 1;
-                            data_addr       <= data_addr + 1;
-                            if (body_counter == (DATA_LEN - 1)) begin
-                                state <= DONE;
-                            end else begin
-                                body_counter <= body_counter + 1;
-                            end
-                        end else master_wr_en <= 0;
-                    end
-
-                    DONE: begin
-                        master_wr_en <= 0;
-                        state <= IDLE;
-                    end
-                    
-                    default: state <= IDLE;
-                endcase
-            end
-        end
-
-    endmodule
-
-module hdr #(
-    parameter [7:0] logical_address = 8'hfe
-) ( 
-    input wire [3:0] index,          // The "Selector" from the Command Module
-    
-    // Header Fields
-    input wire [7:0] protocol, subprotocol, packet_nr,
-    input wire [7:0] param0, param1, param2, param3, 
-    input wire [7:0] param4, param5, param6, param7,
-    input wire [23:0] data_length,       // CRC comes from a separate calculator
-
-    output reg [7:0] dout            // The specific byte requested
+    // Response Interface (to upper layer)
+    output wire [7:0] rd_data,     // Data from RX FIFO
+    input  wire       rd_en,       // Read pulse for RX FIFO
+    output wire       rx_empty     // RX FIFO status
 );
 
-    always @(*) begin
-        case(index)
-            4'd0:  dout = logical_address;
-            4'd1:  dout = protocol;
-            4'd2:  dout = subprotocol;
-            4'd3:  dout = packet_nr;
-            4'd4:  dout = param0;
-            4'd5:  dout = param1;
-            4'd6:  dout = param2;
-            4'd7:  dout = param3;
-            4'd8:  dout = param4;
-            4'd9:  dout = param5;
-            4'd10: dout = param6;
-            4'd11: dout = param7;
-            4'd12: dout = data_length[7:0];
-            4'd13: dout = data_length[15:8];
-            4'd14: dout = data_length[23:16];
-            default: dout = 8'h00;
-        endcase
-    end
+    // --- State Definitions ---
+    localparam IDLE           = 4'd0;
+    localparam SEND_HDR       = 4'd1;
+    localparam SEND_HDR_CRC   = 4'd2;
+    localparam WAIT_CRC       = 4'd3;
+    localparam SEND_DATA      = 4'd4;
+    localparam SEND_DATA_CRC  = 4'd5;
+    localparam RESET_CRC      = 4'd6 ;
+    localparam WAIT_REPLY     = 4'd7;
+    localparam RETRY_GAP      = 4'd8;
+    localparam ERROR_FATAL    = 4'd9;
 
-endmodule
+    // --- Timing Constants ---
+    localparam TIMEOUT_VAL = CLK_HZ/20; // 50ms
+    localparam GAP_VAL     = CLK_HZ/1000; // 100ms
 
-module crc8_generator (
-    input  wire        clk,
-    input  wire        reset,
-    input  wire [7:0]  data_in,
-    input  wire        data_valid,
-    output reg  [7:0]  crc_out
+    // --- Internal Registers/Signals ---
+    reg [3:0]  state;
+    reg [31:0] timer;
+    reg [2:0]  retries;
+    reg [3:0]  hdr_idx;
+    reg [23:0] data_cnt;
+    reg [3:0]  rx_cnt;
+    reg  hdr_sent;
+    reg  data_sent;
+
+    // Connections to Sub-modules
+    reg  tx_wr_en;
+    reg  [7:0] tx_wr_data;
+    wire tx_fifo_full;
+    wire tx_busy;
+    
+    wire [7:0] hdr_dout;
+    
+    reg  reset_crc;
+    reg  [7:0] crc_data_in;
+    reg  crc_data_en;
+    wire [7:0] crc_out;
+
+    reg  rx_fifo_rd_en;
+    wire [7:0] rx_fifo_data;
+    wire rx_fifo_empty;
+
+    wire [7:0] payload_dout;
+    reg [7:0] payload_wr_ptr; 
+    // --- Instantiations ---
+
+    // 1. Header Snapshot/Mux
+    hdr #(.logical_address(8'hFE)) hdr_inst (
+        .clk(clk), .resetn(resetn),
+        .protocol(protocol), .subprotocol(subprotocol), .packet_nr(packet_nr),
+        .param0(param0), .param1(param1), .param2(param2), .param3(param3),
+        .param4(param4), .param5(param5), .param6(param6), .param7(param7),
+        .xlen(xlen), .header_valid(header_valid),
+        .dout_index(hdr_idx), .dout(hdr_dout)
     );
 
-    reg [7:0] crc_reg;
-    reg [7:0] CRC_TABLE [0:255];
+    // 2. Transmit Buffer
+    buffered_uart_tx #(.BIT_RATE(BIT_RATE), .CLK_HZ(CLK_HZ), .FIFO_DEPTH(FIFO_DEPTH)) btx_inst (
+        .clk(clk), .resetn(resetn), .tx_en(1'b1),
+        .wr_data(tx_wr_data), .wr_en(tx_wr_en), .fifo_full(tx_fifo_full),
+        .uart_txd(tx), .tx_busy(tx_busy)
+    );
 
-    wire [7:0] next_crc = CRC_TABLE[crc_reg ^ data_in];
+    // 3. CRC Generator
+    crc8_generator crc8_inst (
+        .clk(clk), .reset(reset_crc),
+        .data_in(crc_data_in), .data_valid(crc_data_en), .crc_out(crc_out)
+    );
 
+    // 4. Receive Buffer
+    buffered_uart_rx #(.BIT_RATE(BIT_RATE), .CLK_HZ(CLK_HZ), .FIFO_DEPTH(FIFO_DEPTH)) rx_inst (
+        .clk(clk), .resetn(resetn), .uart_rxd(rx), .uart_rx_en(1'b1),
+        .rd_data(rx_fifo_data), .rd_en(rx_fifo_rd_en), .fifo_empty(rx_fifo_empty)
+    );
+
+    //5. Payload Buffer
+    payload_buffer #(.MAX_LEN(256)) data_buf_inst (
+        .clk(clk),
+        // External Write Port (Loading the buffer)
+        .wr_addr(payload_wr_ptr),
+        .wr_data(data_in),
+        .wr_en(data_valid),
+        
+        // Internal Read Port (Used by FSM)
+        .rd_addr(data_cnt[7:0]), // data_cnt is our index
+        .rd_data(payload_dout)
+    );
+
+
+integer log_file;
     initial begin
-    $readmemh("crc_table.hex", CRC_TABLE);
-    $display("CRC_TABLE LOADED");
-    //$writememh("debug_table.txt", CRC_TABLE);
-    end
-
-    always @(posedge clk or posedge reset) begin
-        if (reset) begin
-            crc_reg <= 8'h00;
-            crc_out <= 8'h00;
-        end 
-        else if (data_valid) begin
-            crc_reg <= next_crc;
-            crc_out <= next_crc;
-            //$display() 
-        end
-    end
-    endmodule
-
-module buffered_uart_tx #(
-        parameter BIT_RATE = 9600,//BAUD RATE = 115200
-        parameter CLK_HZ   = 50000000,
-        parameter FIFO_DEPTH = 32
-    )(
-        input wire clk,
-        input wire resetn,
-
-        input wire tx_en,//enables transmit must be used carefully cuz it stops transmission
-        
-        input  wire [7:0] wr_data,
-        input  wire wr_en,
-        output wire fifo_full,
-        
-        // Physical Line
-        output wire uart_txd,
-        output wire uart_busy// UART is transmitting
-    );
-
-        wire [7:0] fifo_dout;
-        wire fifo_empty;
-        reg fifo_rd_en;
-        reg uart_en;
-
-        fifo #(.DEPTH(FIFO_DEPTH), .WIDTH(8)) tx_buffer (
-            .clk(clk),
-            .rst(!resetn),
-            .wr_en(wr_en),
-            .rd_en(fifo_rd_en),
-            .din(wr_data),
-            .dout(fifo_dout),
-            .full(fifo_full),
-            .empty(fifo_empty)
-        );
-
-        uart_tx #(
-            .BIT_RATE(BIT_RATE),
-            .CLK_HZ(CLK_HZ)
-        ) physical_tx (
-            .clk(clk),
-            .resetn(resetn),
-            .uart_txd(uart_txd),
-            .uart_tx_busy(uart_busy),
-            .uart_tx_en(uart_en),
-            .uart_tx_data(fifo_dout)
-        );
-
-        always @(posedge clk) begin
-            if (!resetn) begin
-                fifo_rd_en <= 0;
-                uart_en    <= 0;
-            end else begin
-                if (tx_en && !fifo_empty && !uart_busy && !uart_en) begin
-                    fifo_rd_en <= 1;
-                    uart_en    <= 1;
-                end else begin
-                    fifo_rd_en <= 0;
-                    uart_en    <= 0;
-                end
+                // Keep the console monitor for real-time debugging
+        $monitor("[%0t] State: %d | TX: %b Data: %h | HDR: %d | DATA: %d | Timer: %d | CRC: %H",
+                        $time, uut.state, uut.tx_wr_en, uut.tx_wr_data, uut.hdr_idx, uut.data_cnt, uut.timer, uut.crc_out);    
             end
-        end
 
-
-    endmodule
-
-module buffered_uart_rx #(
-        parameter BIT_RATE = 9600,
-        parameter CLK_HZ   = 50000000,
-        parameter FIFO_DEPTH = 32
-    )(
-        input  wire       clk,
-        input  wire       resetn,
-
-        input  wire       uart_rxd,
-        input  wire       uart_rx_en,
-
-        output wire [7:0] rd_data,     // Data out from FIFO
-        input  wire       rd_en,       // System pulses this to "pop" a byte
-        output wire       fifo_empty,  // High if no data is available
-        output wire       fifo_full,   // High if buffer is overflowing
-        output wire       rx_break     // BREAK condition detected
-    );
-
-        wire [7:0] raw_rx_data;
-        wire       raw_rx_valid;
-
-        uart_rx #(
-            .BIT_RATE(BIT_RATE),
-            .CLK_HZ(CLK_HZ)
-        ) physical_rx (
-            .clk(clk),
-            .resetn(resetn),
-            .uart_rxd(uart_rxd),
-            .uart_rx_en(uart_rx_en),
-            .uart_rx_break(rx_break),
-            .uart_rx_valid(raw_rx_valid),
-            .uart_rx_data(raw_rx_data)
-        );
-
-        fifo #(.DEPTH(FIFO_DEPTH), .WIDTH(8)) rx_buffer (
-            .clk(clk),
-            .rst(!resetn),          
-            .wr_en(raw_rx_valid),   
-            .rd_en(rd_en),          
-            .din(raw_rx_data),
-            .dout(rd_data),
-            .full(fifo_full),
-            .empty(fifo_empty)
-        );
-
-    endmodule
-
-module fifo #(
-        parameter DEPTH = 32,
-        parameter WIDTH = 8
-    )(
-        input wire clk,
-        input wire rst,
-
-        input wire wr_en,
-        input wire rd_en,
-        input wire [WIDTH-1:0] din,
-
-        output reg [WIDTH-1:0] dout,
-        output wire full,
-        output wire empty
-    );
-        reg [WIDTH-1:0] mem [0:DEPTH-1];
-        reg [$clog2(DEPTH):0] wr_ptr, rd_ptr;
-
-        assign empty = (wr_ptr == rd_ptr);
-        assign full  = (wr_ptr - rd_ptr == DEPTH);
-
-        always @(posedge clk) begin
-            if (rst) begin
-                wr_ptr <= 0;
-                rd_ptr <= 0;
-            end else begin
-                // write
-                if (wr_en && !full) begin
-                    mem[wr_ptr[$clog2(DEPTH)-1:0]] <= din;
-                    wr_ptr <= wr_ptr + 1;
-                end
-
-                // read
-                if (rd_en && !empty) begin
-                    dout <= mem[rd_ptr[$clog2(DEPTH)-1:0]];
-                    rd_ptr <= rd_ptr + 1;
-                end
-            end
-        end
-
-    endmodule
-
-
-
-    // 
-    // Module: uart_rx 
-    // 
-    // Notes:
-    // - UART reciever module.
-    //
-
-module uart_rx
-    #(
-        parameter   BIT_RATE        = 9600, // bits / sec
-        parameter   CLK_HZ          = 50_000_000,
-        parameter   PAYLOAD_BITS    = 8,
-        parameter   STOP_BITS       = 1
-    )(
-    input  wire       clk          , // Top level system clock input.
-    input  wire       resetn       , // Asynchronous active low reset.
-    input  wire       uart_rxd     , // UART Recieve pin.
-    input  wire       uart_rx_en   , // Recieve enable
-    output wire       uart_rx_break, // Did we get a BREAK message?
-    output wire       uart_rx_valid, // Valid data recieved and available.
-    output reg  [PAYLOAD_BITS-1:0] uart_rx_data   // The recieved data.
-    );
-
-    // --------------------------------------------------------------------------- 
-    // External parameters.
-    // 
-
-    //
-    // Input bit rate of the UART line.
-    //parameter   BIT_RATE        = 9600; // bits / sec
-    localparam  BIT_P           = 1_000_000_000 * 1/BIT_RATE; // nanoseconds
-
-    //
-    // Clock frequency in hertz.
-    //parameter   CLK_HZ          =    50_000_000;
-    localparam  CLK_P           = 1_000_000_000 * 1/CLK_HZ; // nanoseconds
-
-    //
-    // Number of data bits recieved per UART packet.
-    //parameter   PAYLOAD_BITS    = 8;
-
-    //
-    // Number of stop bits indicating the end of a packet.
-    //parameter   STOP_BITS       = 1;
-
-    // -------------------------------------------------------------------------- 
-    // Internal parameters.
-    // 
-
-    //
-    // Number of clock cycles per uart bit.
-    localparam       CYCLES_PER_BIT     = BIT_P / CLK_P;
-
-    //
-    // Size of the registers which store sample counts and bit durations.
-    localparam       COUNT_REG_LEN      = 1+$clog2(CYCLES_PER_BIT);
-
-    // -------------------------------------------------------------------------- 
-    // Internal registers.
-    // 
-
-    //
-    // Internally latched value of the uart_rxd line. Helps break long timing
-    // paths from input pins into the logic.
-    reg rxd_reg;
-    reg rxd_reg_0;
-
-    //
-    // Storage for the recieved serial data.
-    reg [PAYLOAD_BITS-1:0] recieved_data;
-
-    //
-    // Counter for the number of cycles over a packet bit.
-    reg [COUNT_REG_LEN-1:0] cycle_counter;
-
-    //
-    // Counter for the number of recieved bits of the packet.
-    reg [3:0] bit_counter;
-
-    //
-    // Sample of the UART input line whenever we are in the middle of a bit frame.
-    reg bit_sample;
-
-    //
-    // Current and next states of the internal FSM.
-    reg [2:0] fsm_state;
-    reg [2:0] n_fsm_state;
-
-    localparam FSM_IDLE = 0;
-    localparam FSM_START= 1;
-    localparam FSM_RECV = 2;
-    localparam FSM_STOP = 3;
-
-    // --------------------------------------------------------------------------- 
-    // Output assignment
-    // 
-
-    assign uart_rx_break = uart_rx_valid && ~|recieved_data;
-    assign uart_rx_valid = fsm_state == FSM_STOP && n_fsm_state == FSM_IDLE;
-
+            
+// --- Main Control FSM ---
     always @(posedge clk) begin
-        if(!resetn) begin
-            uart_rx_data  <= {PAYLOAD_BITS{1'b0}};
-        end else if (fsm_state == FSM_STOP) begin
-            uart_rx_data  <= recieved_data;
-        end
-    end
 
-    // --------------------------------------------------------------------------- 
-    // FSM next state selection.
-    // 
+        if (!resetn || header_valid) 
+            payload_wr_ptr <= 0;
+        else if (data_valid) 
+            payload_wr_ptr <= payload_wr_ptr + 1;//reset pointer on new header, increment on each valid data input
 
-    wire next_bit     = cycle_counter == CYCLES_PER_BIT ||
-                            fsm_state       == FSM_STOP && 
-                            cycle_counter   == CYCLES_PER_BIT/2;
-    wire payload_done = bit_counter   == PAYLOAD_BITS  ;
-
-    //
-    // Handle picking the next state.
-    always @(*) begin : p_n_fsm_state
-        case(fsm_state)
-            FSM_IDLE : n_fsm_state = rxd_reg      ? FSM_IDLE : FSM_START;
-            FSM_START: n_fsm_state = next_bit     ? FSM_RECV : FSM_START;
-            FSM_RECV : n_fsm_state = payload_done ? FSM_STOP : FSM_RECV ;
-            FSM_STOP : n_fsm_state = next_bit     ? FSM_IDLE : FSM_STOP ;
-            default  : n_fsm_state = FSM_IDLE;
-        endcase
-    end
-
-    // --------------------------------------------------------------------------- 
-    // Internal register setting and re-setting.
-    // 
-
-    //
-    // Handle updates to the recieved data register.
-    integer i = 0;
-    always @(posedge clk) begin : p_recieved_data
-        if(!resetn) begin
-            recieved_data <= {PAYLOAD_BITS{1'b0}};
-        end else if(fsm_state == FSM_IDLE             ) begin
-            recieved_data <= {PAYLOAD_BITS{1'b0}};
-        end else if(fsm_state == FSM_RECV && next_bit ) begin
-            recieved_data[PAYLOAD_BITS-1] <= bit_sample;
-            for ( i = PAYLOAD_BITS-2; i >= 0; i = i - 1) begin
-                recieved_data[i] <= recieved_data[i+1];
-            end
-        end
-    end
-
-    //
-    // Increments the bit counter when recieving.
-    always @(posedge clk) begin : p_bit_counter
-        if(!resetn) begin
-            bit_counter <= 4'b0;
-        end else if(fsm_state != FSM_RECV) begin
-            bit_counter <= {COUNT_REG_LEN{1'b0}};
-        end else if(fsm_state == FSM_RECV && next_bit) begin
-            bit_counter <= bit_counter + 1'b1;
-        end
-    end
-
-    //
-    // Sample the recieved bit when in the middle of a bit frame.
-    always @(posedge clk) begin : p_bit_sample
-        if(!resetn) begin
-            bit_sample <= 1'b0;
-        end else if (cycle_counter == CYCLES_PER_BIT/2) begin
-            bit_sample <= rxd_reg;
-        end
-    end
-
-
-    //
-    // Increments the cycle counter when recieving.
-    always @(posedge clk) begin : p_cycle_counter
-        if(!resetn) begin
-            cycle_counter <= {COUNT_REG_LEN{1'b0}};
-        end else if(next_bit) begin
-            cycle_counter <= {COUNT_REG_LEN{1'b0}};
-        end else if(fsm_state == FSM_START || 
-                    fsm_state == FSM_RECV  || 
-                    fsm_state == FSM_STOP   ) begin
-            cycle_counter <= cycle_counter + 1'b1;
-        end
-    end
-
-
-    //
-    // Progresses the next FSM state.
-    always @(posedge clk) begin : p_fsm_state
-        if(!resetn) begin
-            fsm_state <= FSM_IDLE;
+        if (!resetn) begin
+            state <= IDLE;
+            timer <= 0;
+            retries <= 0;
+            hdr_idx <= 0;
+            data_cnt <= 0;
+            tx_wr_en <= 0;
+            crc_data_en <= 0;
+            reset_crc <= 1;
+            rx_fifo_rd_en <= 0;
+            rx_cnt <= 0;
         end else begin
-            fsm_state <= n_fsm_state;
-        end
-    end
+            // Default signal states
+            tx_wr_en <= 0;
+            crc_data_en <= 0;
+            rx_fifo_rd_en <= 0;
 
+            case (state)
+                IDLE: begin
+                    timer <= 0;
+                    hdr_idx <= 0;
+                    data_cnt <= 0;
+                    rx_cnt <= 0;
+                    reset_crc <= 1;
+                    if (start_trigger) begin
+                        state <= SEND_HDR;
+                        
+                    end
+                end
 
-    //
-    // Responsible for updating the internal value of the rxd_reg.
-    always @(posedge clk) begin : p_rxd_reg
-        if(!resetn) begin
-            rxd_reg     <= 1'b1;
-            rxd_reg_0   <= 1'b1;
-        end else if(uart_rx_en) begin
-            rxd_reg     <= rxd_reg_0;
-            rxd_reg_0   <= uart_rxd;
-        end
-    end
+               SEND_HDR: begin
+                reset_crc <= 0;
+                    if (!tx_fifo_full) begin
+                        tx_wr_data <= hdr_dout;
+                        tx_wr_en   <= 1;
+                        crc_data_in<= hdr_dout;
+                        crc_data_en <= 1; // Calculating Header CRC (Bytes 0-14)
+                        if (hdr_idx == 4'd14) begin
+                            state <= WAIT_CRC;
+                            hdr_sent <= 1;
+                        end
+                        else hdr_idx <= hdr_idx + 1;
+                    end
+                end
 
+                WAIT_CRC:begin
+                    if (hdr_sent) state <= SEND_HDR_CRC;
+                    if (data_sent) state <= SEND_DATA_CRC; // If no header, move to data phase
+                end
 
-    endmodule
+                SEND_HDR_CRC: begin
+                    if (!tx_fifo_full) begin
+                        tx_wr_data <= crc_out; // Send Byte 15
+                        tx_wr_en   <= 1;
+                        state      <= RESET_CRC;
+                        
+                    end
+                end
 
-module uart_tx
-        #(
-            parameter   BIT_RATE        = 9600, // bits / sec
-            parameter   CLK_HZ          = 50_000_000,
-            parameter   PAYLOAD_BITS    = 8,
-            parameter   STOP_BITS       = 1
-        )(
-        input  wire         clk         , // Top level system clock input.
-        input  wire         resetn      , // Asynchronous active low reset.
-        output wire         uart_txd    , // UART transmit pin.
-        output wire         uart_tx_busy, // Module busy sending previous item.
-        input  wire         uart_tx_en  , // Send the data on uart_tx_data
-        input  wire [PAYLOAD_BITS-1:0]   uart_tx_data  // The data to be sent
-        );
+                RESET_CRC:begin
+                    reset_crc <= 1;
+                    state <= (xlen == 0) ? WAIT_REPLY : SEND_DATA;
 
-        // Input bit rate of the UART line.
-        //parameter   BIT_RATE        = 9600; // bits / sec
-        localparam  BIT_P           = 1_000_000_000 * 1/BIT_RATE; // nanoseconds
+                end
 
-        // Clock frequency in hertz.
-        //parameter   CLK_HZ          =    50_000_000;
-        localparam  CLK_P           = 1_000_000_000 * 1/CLK_HZ; // nanoseconds
+                SEND_DATA: begin
+                        reset_crc <= 0;
+                        if (!tx_fifo_full) begin
+                            tx_wr_data  <= payload_dout; // From the new buffer
+                            tx_wr_en    <= 1;
+                            crc_data_in <= payload_dout;
+                            crc_data_en <= 1;
+                            
+                            if (data_cnt == (xlen - 1)) begin
+                                state <= WAIT_CRC;
+                                data_sent <= 1;
+                            end
+                            else  data_cnt <= data_cnt + 1; // data_cnt acts as the rd_addr
+                        end
+                    end
 
-        // Number of data bits recieved per UART packet.
-        //parameter   PAYLOAD_BITS    = 8;
+                SEND_DATA_CRC: begin
+                    if (!tx_fifo_full) begin
+                        tx_wr_data <= crc_out; // Send the Data CRC byte
+                        tx_wr_en   <= 1;
+                        state      <= WAIT_REPLY;
+                        timer      <= 0;
+                        
+                    end
+                end
 
-        // Number of stop bits indicating the end of a packet.
-        //parameter   STOP_BITS       = 1;
+                WAIT_REPLY: begin
+                    hdr_sent <= 0;
+                    data_sent <= 0;
+                    timer <= timer + 1;
+                    if (timer >= TIMEOUT_VAL) begin
+                        state <= RETRY_GAP;
+                        timer <= 0;
+                    end else if (!rx_fifo_empty) begin
+                        // Byte received! Pulse read.
+                        rx_fifo_rd_en <= 1;
+                        
+                        // ACK Logic: Look at Byte 3 of the response
+                        // In a real scenario, you'd collect all 16, check CRC,
+                        // then check byte 3. For now, we'll check byte 3 directly.
+                        if (rx_cnt == 4'd3) begin
+                            if (rx_fifo_data == 8'h00) begin // 0x00 is ACK
+                                state <= IDLE; // Packet confirmed!
+                                retries <= 0;
+                            end else begin
+                                state <= RETRY_GAP; // NACK received
+                            end
+                        end
+                        rx_cnt <= rx_cnt + 1;
+                    end
+                end
 
-        //
-        // Number of clock cycles per uart bit.
-        localparam       CYCLES_PER_BIT     = BIT_P / CLK_P;
+                RETRY_GAP: begin
+                    timer <= timer + 1;
+                    if (timer >= GAP_VAL) begin
+                        timer <= 0;
+                        if (retries < 3) begin
+                            retries <= retries + 1;
+                            hdr_idx <= 0;
+                            data_cnt <= 0;
+                            rx_cnt <= 0;
+                            state <= SEND_HDR;
+                            reset_crc <= 1;
+                        end else begin
+                            state <= ERROR_FATAL;
+                        end
+                    end
+                end
 
-        // Size of the registers which store sample counts and bit durations.
-        localparam       COUNT_REG_LEN      = 1+$clog2(CYCLES_PER_BIT);
+                ERROR_FATAL: state <= ERROR_FATAL; // Stay until reset
 
-        // Internally latched value of the uart_txd line. Helps break long timing
-        // paths from the logic to the output pins.
-        reg txd_reg;
-
-        // Storage for the serial data to be sent.
-        reg [PAYLOAD_BITS-1:0] data_to_send;
-
-        // Counter for the number of cycles over a packet bit.
-        reg [COUNT_REG_LEN-1:0] cycle_counter;
-
-        //
-        // Counter for the number of sent bits of the packet.
-        reg [3:0] bit_counter;
-
-        // Current and next states of the internal FSM.
-        reg [2:0] fsm_state;
-        reg [2:0] n_fsm_state;
-
-        localparam FSM_IDLE = 0;
-        localparam FSM_START= 1;
-        localparam FSM_SEND = 2;
-        localparam FSM_STOP = 3;
-
-        assign uart_tx_busy = fsm_state != FSM_IDLE;
-        assign uart_txd     = txd_reg;
-
-        wire next_bit     = cycle_counter == CYCLES_PER_BIT;
-        wire payload_done = bit_counter   == PAYLOAD_BITS  ;
-        wire stop_done    = bit_counter   == STOP_BITS && fsm_state == FSM_STOP;
-
-        // Handle picking the next state.
-        always @(*) begin : p_n_fsm_state
-            case(fsm_state)
-                FSM_IDLE : n_fsm_state = uart_tx_en   ? FSM_START: FSM_IDLE ;
-                FSM_START: n_fsm_state = next_bit     ? FSM_SEND : FSM_START;
-                FSM_SEND : n_fsm_state = payload_done ? FSM_STOP : FSM_SEND ;
-                FSM_STOP : n_fsm_state = stop_done    ? FSM_IDLE : FSM_STOP ;
-                default  : n_fsm_state = FSM_IDLE;
+                default: state <= IDLE;
             endcase
         end
+    end
 
-        // Handle updates to the sent data register.
-        integer i = 0;
-        always @(posedge clk) begin : p_data_to_send
-            if(!resetn) begin
-                data_to_send <= {PAYLOAD_BITS{1'b0}};
-            end else if(fsm_state == FSM_IDLE && uart_tx_en) begin
-                data_to_send <= uart_tx_data;
-            end else if(fsm_state       == FSM_SEND       && next_bit ) begin
-                for ( i = PAYLOAD_BITS-2; i >= 0; i = i - 1) begin
-                    data_to_send[i] <= data_to_send[i+1];
-                end
-            end
-        end
+    // Direct wiring for the external system to read from RX FIFO
+    assign rd_data  = rx_fifo_data;
+    assign rx_empty = rx_fifo_empty;
 
-        // Increments the bit counter each time a new bit frame is sent.
-        always @(posedge clk) begin : p_bit_counter
-            if(!resetn) begin
-                bit_counter <= 4'b0;
-            end else if(fsm_state != FSM_SEND && fsm_state != FSM_STOP) begin
-                bit_counter <= {COUNT_REG_LEN{1'b0}};
-            end else if(fsm_state == FSM_SEND && n_fsm_state == FSM_STOP) begin
-                bit_counter <= {COUNT_REG_LEN{1'b0}};
-            end else if(fsm_state == FSM_STOP&& next_bit) begin
-                bit_counter <= bit_counter + 1'b1;
-            end else if(fsm_state == FSM_SEND && next_bit) begin
-                bit_counter <= bit_counter + 1'b1;
-            end
-        end
-
-        // Increments the cycle counter when sending.
-        always @(posedge clk) begin : p_cycle_counter
-            if(!resetn) begin
-                cycle_counter <= {COUNT_REG_LEN{1'b0}};
-            end else if(next_bit) begin
-                cycle_counter <= {COUNT_REG_LEN{1'b0}};
-            end else if(fsm_state == FSM_START || 
-                        fsm_state == FSM_SEND  || 
-                        fsm_state == FSM_STOP   ) begin
-                cycle_counter <= cycle_counter + 1'b1;
-            end
-        end
-
-        // Progresses the next FSM state.
-        always @(posedge clk) begin : p_fsm_state
-            if(!resetn) begin
-                fsm_state <= FSM_IDLE;
-            end else begin
-                fsm_state <= n_fsm_state;
-            end
-        end
-
-        // Responsible for updating the internal value of the txd_reg.
-        always @(posedge clk) begin : p_txd_reg
-            if(!resetn) begin
-                txd_reg <= 1'b1;
-            end else if(fsm_state == FSM_IDLE) begin
-                txd_reg <= 1'b1;
-            end else if(fsm_state == FSM_START) begin
-                txd_reg <= 1'b0;
-            end else if(fsm_state == FSM_SEND) begin
-                txd_reg <= data_to_send[0];
-            end else if(fsm_state == FSM_STOP) begin
-                txd_reg <= 1'b1;
-            end
-        end
-
-        endmodule
-
+endmodule

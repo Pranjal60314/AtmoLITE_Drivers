@@ -1,153 +1,114 @@
 `timescale 1ns / 1ps
 
-module uart_system_tb();
+module control_module_tb();
 
-    // Parameters
-    localparam CLK_HZ     = 50_000_000;
-    localparam BIT_RATE   = 115200; // Fast for simulation
-    localparam CLK_PERIOD = 20;     // 50MHz
-    localparam FIFO_DEPTH = 32;
+    parameter BIT_RATE   = 115200; 
+    parameter CLK_HZ     = 50_000_000;
+    parameter CLK_PERIOD = 20;     
+    localparam BIT_PERIOD = 1_000_000_000 / BIT_RATE;
 
-    // Clock and Reset
+    // Signals
     reg clk = 0;
     reg resetn = 0;
+    reg [7:0] protocol, subprotocol, packet_nr;
+    reg [7:0] p0, p1, p2, p3, p4, p5, p6, p7;
+    reg [23:0] xlen;
+    reg header_valid, start_trigger;
+    wire tx;
+    reg rx = 1;
+    reg [7:0] data_in;
+    reg data_valid;
+    wire [7:0] rd_data;
+    wire rx_empty;
 
-    // TX Signals
-    reg        tx_en = 1;
-    reg  [7:0] tx_wr_data = 0;
-    reg        tx_wr_en = 0;
-    wire       tx_fifo_full;
-    wire       uart_line;   // The physical TX pin
-    wire       tx_system_busy;
-
-    // RX Signals
-    reg        rx_en = 1;
-    reg        rx_rd_en = 0;
-    wire [7:0] rx_rd_data;
-    wire       rx_fifo_empty;
-    wire       rx_fifo_full;
-    wire       rx_break;
-
-    // 1. Instantiate Buffered TX
-    buffered_uart_tx #(
+    // Instantiate UUT
+    control_module #(
         .BIT_RATE(BIT_RATE),
         .CLK_HZ(CLK_HZ),
-        .FIFO_DEPTH(FIFO_DEPTH)
-    ) dut_tx (
-        .clk(clk),
-        .resetn(resetn),
-        .tx_en(tx_en),
-        .wr_data(tx_wr_data),
-        .wr_en(tx_wr_en),
-        .fifo_full(tx_fifo_full),
-        .uart_txd(uart_line), // Connect TX to our "wire"
-        .tx_busy(tx_system_busy)
+        .FIFO_DEPTH(64)
+    ) uut (
+        .clk(clk), .resetn(resetn),
+        .protocol(protocol), .subprotocol(subprotocol), .packet_nr(packet_nr),
+        .param0(p0), .param1(p1), .param2(p2), .param3(p3),
+        .param4(p4), .param5(p5), .param6(p6), .param7(p7),
+        .xlen(xlen), .header_valid(header_valid), .start_trigger(start_trigger),
+        .tx(tx), .rx(rx),
+        .data_in(data_in), .data_valid(data_valid),
+        .rd_data(rd_data), .rd_en(1'b0), 
+        .rx_empty(rx_empty)
     );
 
-    // 2. Instantiate Buffered RX
-    buffered_uart_rx #(
-        .BIT_RATE(BIT_RATE),
-        .CLK_HZ(CLK_HZ),
-        .FIFO_DEPTH(FIFO_DEPTH)
-    ) dut_rx (
-        .clk(clk),
-        .resetn(resetn),
-        .uart_rxd(uart_line), // Loopback: Connect RX to the TX "wire"
-        .uart_rx_en(rx_en),
-        .rd_data(rx_rd_data),
-        .rd_en(rx_rd_en),
-        .fifo_empty(rx_fifo_empty),
-        .fifo_full(rx_fifo_full),
-        .rx_break(rx_break)
-    );
-
-    // Clock Generation
     always #(CLK_PERIOD/2) clk = ~clk;
 
-    // --- Test Logic ---
+    // --- Simulate ACK Reply ---
+    task send_ack_reply;
+        input [7:0] pkt_num;
+        integer i, j;
+        reg [7:0] reply [0:15];
+        begin
+            reply[0] = 8'hFE; reply[1] = 8'h18; reply[2] = pkt_num;
+            reply[3] = 8'h00; // 0x00 is ACK
+            for(i=4; i<15; i=i+1) reply[i] = 8'h00;
+            reply[15] = 8'hAA; // Dummy CRC for simulation
+
+            for (i=0; i<16; i=i+1) begin
+                rx = 0; #(BIT_PERIOD); // Start bit
+                for (j=0; j<8; j=j+1) begin rx = reply[i][j]; #(BIT_PERIOD); end
+                rx = 1; #(BIT_PERIOD); // Stop bit
+                #(BIT_PERIOD/2);       // Tiny inter-byte gap
+            end
+        end
+    endtask
+
+// --- Batch Load Test logic ---
     initial begin
-        // Setup Waveform Dump for Arch/Icarus
         $dumpfile(`VCD_FILE);
-        $dumpvars(0, uart_system_tb);
-
-        // Reset Sequence
-        resetn = 0;
-        #(CLK_PERIOD * 20);
+        $dumpvars(0, control_module_tb);
+        // Reset Phase
+        resetn = 0; header_valid = 0; start_trigger = 0;
+        data_valid = 0; data_in = 0;
+        #(CLK_PERIOD * 10);
         resetn = 1;
-        #(CLK_PERIOD * 20);
+        #(CLK_PERIOD * 10);
 
-        $display("[%0t] Starting Loopback Test...", $time);
+        // Setup Header Data (Existing logic)
+        protocol = 8'h18;  packet_nr = 8'hA1; subprotocol = 8'h00;
+        p0=8'h09; p1=8'h00; p2=8'h00; p3=8'h00;
+        p4=8'h00; p5=8'h00; p6=8'h00; p7=8'h00; 
+        xlen =24'd2;
+        header_valid = 1;
+        #(CLK_PERIOD);
+        header_valid = 0;
 
-        // --- Step 1: Push 3 bytes into TX FIFO ---
-        send_tx_byte(8'hA5);
-        send_tx_byte(8'h3C);
-        send_tx_byte(8'h7E);
-
-        // --- Step 2: Wait for bits to fly across the "wire" ---
-        // Each byte takes approx 87us at 115200 baud
-        wait(rx_fifo_empty == 0);
-        $display("[%0t] First byte detected in RX FIFO!", $time);
+        // PRE-LOAD Payload Data into the new Buffer
+        // We do this BEFORE starting the FSM
+        $display("[%0t] TB: Loading Payload RAM...", $time);
         
-        // Wait until all 3 bytes are finished and sitting in RX FIFO
-        #(CLK_PERIOD * 500000); 
+        data_in = 8'h20; data_valid = 1; // Byte 0
+        #(CLK_PERIOD);
+        data_in = 8'h33; data_valid = 1; // Byte 1
+        #(CLK_PERIOD);
+        data_valid = 0;
 
-        // --- Step 3: Read back from RX FIFO and Verify ---
-        read_rx_byte(8'hA5);
-        read_rx_byte(8'h3C);
-        read_rx_byte(8'h7E);
+        // Start FSM
+        #(CLK_PERIOD * 5);
+        //$display("[%0t] TB: Triggering Start. FSM will handle retries automatically.", $time);
+        start_trigger = 1;
+        #(CLK_PERIOD);
+        start_trigger = 0;
 
-        $display("[%0t] SUCCESS: All bytes matched!", $time);
-        #(CLK_PERIOD * 100);
+        // Just wait for the end
+        // Even if a timeout happens, the FSM has the data in RAM
+        wait(uut.state == 4'd7); 
+        //wait(uut.btx_inst.tx_busy == 0);
+        //#(BIT_PERIOD * 2);
+        
+        send_ack_reply(8'hA1);
+
+        wait(uut.state == 4'd0);
+        $display("[%0t] TB: SUCCESSFULLY RETURNED TO IDLE", $time);
         $finish;
     end
 
-        // --- TRANSMIT MONITOR ---
-    always @(posedge clk) begin
-        // When the glue logic in the TX buffer pulses 'uart_en', 
-        // it means a byte is moving from FIFO to the UART Shifter.
-        if (dut_tx.uart_en) begin
-            $display("[%0t] >> PHYSICAL TX STARTING: Byte 0x%h", $time, dut_tx.fifo_dout);
-        end
-    end
-
-    // --- RECEIVE MONITOR ---
-    always @(posedge clk) begin
-        // When the internal UART RX module says 'valid', 
-        // it means it just finished shifting in a full byte from the wire.
-        if (dut_rx.raw_rx_valid) begin
-            $display("[%0t] << PHYSICAL RX COMPLETE: Byte 0x%h", $time, dut_rx.raw_rx_data);
-        end
-    end
-
-    // --- Helper Tasks ---
-    task send_tx_byte(input [7:0] data);
-        begin
-            @(posedge clk);
-            if (!tx_fifo_full) begin
-                tx_wr_data = data;
-                tx_wr_en = 1;
-                @(posedge clk);
-                tx_wr_en = 0;
-                $display("[%0t] TX_FIFO WRITE: 0x%h", $time, data);
-            end
-        end
-    endtask
-
-    task read_rx_byte(input [7:0] expected);
-        begin
-            @(posedge clk);
-            if (!rx_fifo_empty) begin
-                rx_rd_en = 1;
-                @(posedge clk);
-                rx_rd_en = 0;
-                if (rx_rd_data === expected)
-                    $display("[%0t] RX_FIFO READ:  0x%h (MATCH)", $time, rx_rd_data);
-                else
-                    $display("[%0t] ERROR: Expected 0x%h, Got 0x%h", $time, expected, rx_rd_data);
-            end else begin
-                $display("[%0t] ERROR: Attempted to read empty RX FIFO", $time);
-            end
-        end
-    endtask
 
 endmodule
