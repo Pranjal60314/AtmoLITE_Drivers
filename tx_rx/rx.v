@@ -1,3 +1,4 @@
+`timescale 1ns / 1ps
 module buffered_uart_rx #(
     parameter BIT_RATE = 9600,
     parameter CLK_HZ   = 50000000,

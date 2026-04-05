@@ -1,3 +1,4 @@
+`timescale 1ns / 1ps
 module payload_buffer #(
     parameter MAX_LEN = 256
 )(

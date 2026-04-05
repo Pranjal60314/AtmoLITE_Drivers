@@ -1,3 +1,4 @@
+`timescale 1ns / 1ps
 module crc8_generator (
     input  wire        clk,
     input  wire        reset,

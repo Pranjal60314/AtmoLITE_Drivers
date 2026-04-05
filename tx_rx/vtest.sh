@@ -16,7 +16,7 @@ echo "--- Arch Linux Verilog Automator ---"
 echo "Cleaning old simulation files..."
 
 # Remove old files to ensure the log and simulation are fresh
-rm -f "$VVP_NAME" "$VCD_NAME" "$LOG_FILE"
+rm -rf "$VVP_NAME" "$VCD_NAME" "$LOG_FILE"
 
 echo "Target: $VCD_NAME"
 echo "Log:    $LOG_FILE"

@@ -49,7 +49,7 @@ module control_module_tb();
             reply[0] = 8'hFE; reply[1] = 8'h18; reply[2] = pkt_num;
             reply[3] = 8'h00; // 0x00 is ACK
             for(i=4; i<15; i=i+1) reply[i] = 8'h00;
-            reply[15] = 8'hAA; // Dummy CRC for simulation
+            reply[15] = 8'hF9; // Dummy CRC for simulation
 
             for (i=0; i<16; i=i+1) begin
                 rx = 0; #(BIT_PERIOD); // Start bit

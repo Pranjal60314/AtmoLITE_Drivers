@@ -1,4 +1,5 @@
- module hdr #(
+`timescale 1ns / 1ps
+module hdr #(
 
 parameter [7:0] logical_address = 8'hFE
 
